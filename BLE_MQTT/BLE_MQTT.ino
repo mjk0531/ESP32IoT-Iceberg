@@ -14,9 +14,10 @@
 #define TIME_TO_SLEEP 5           /* Time ESP32 will go to sleep (in seconds) */
 
 RTC_DATA_ATTR int bootCount = 0;
-
-
 uint8_t txValue = 0;
+unsigned long previousTimeSET;
+unsigned long previousTimeALERT;
+bool PMICState = false;
 
 // const char* OTA_ssid = "jkmin";
 // const char* OTA_password = "antsperpet";
@@ -205,7 +206,7 @@ void messageReceived(String& topic, String& payload) {
 
 
 //button 0
-//short press: 
+//short press:
 //long press: deep sleep / wake-up
 
 //on start, if button0&1 pressed)
@@ -215,8 +216,8 @@ void messageReceived(String& topic, String& payload) {
 //  pressed(long)   | released   ---> deep sleep, power on/off
 
 //  pressed(long) | pressed(long)   ---> wifi/ble mode change
-//  pressed   | released ---> wifi mode 
-//  pressed   | released ---> ble mode 
+//  pressed   | released ---> wifi mode
+//  pressed   | released ---> ble mode
 
 
 
@@ -241,15 +242,17 @@ const char* path = "/acc.txt";
 Button button1(PIN_BUTTON1);
 Button button2(PIN_BUTTON2);
 
-void handleButton1Press(){
-  button1.pressStartTime=millis();
+void handleButton1Press() {
+  button1.pressStartTime = millis();
   Serial.print("button1 pressed, t[ms]=");
   Serial.println(button1.pressStartTime);
+  op_mode = OP_MODE_BLE;
 }
-void handleButton2Press(){
-  button2.pressStartTime=millis();
+void handleButton2Press() {
+  button2.pressStartTime = millis();
   Serial.print("button2 pressed, t[ms]=");
   Serial.println(button2.pressStartTime);
+  deep_sleep_perpet();
 }
 
 void setup() {
@@ -260,11 +263,11 @@ void setup() {
   pinMode(PIN_LED1, OUTPUT);
   pinMode(PIN_LED2, OUTPUT);
   pinMode(18, OUTPUT);
+  pinMode(19, OUTPUT);
   pinMode(34, INPUT);
 
   attachInterrupt(digitalPinToInterrupt(button1.pin), handleButton1Press, FALLING);
   attachInterrupt(digitalPinToInterrupt(button2.pin), handleButton2Press, FALLING);
-
   // EEPROM setup
   init_eeprom();
   eepromSetup_custom();
@@ -272,48 +275,48 @@ void setup() {
   print_settings();
 
   digitalWrite(PIN_LED2, HIGH);
-  op_mode=getOpMode();
-  if(button1.isPressed() && button2.isPressed()){ // BLE/WiFi setting mode
-    int waitCount = 0;
-    delay(2000);
-    while(waitCount<5){
-      digitalWrite(PIN_LED1, HIGH);
-      delay(300);
-      digitalWrite(PIN_LED1, LOW);
-      delay(1700);
-      if(button1.isPressed()){
-        Serial.println("OP_MODE_WIFI");
-        op_mode = OP_MODE_WIFI;
-        break;
-      }else if(button2.isPressed()){
-        Serial.println("OP_MODE_BLE");
-        op_mode = OP_MODE_BLE;
-        break;
-      }
-      waitCount++;
+  int waitCount = 0;
+  delay(2000);
+  while (waitCount < 5) {
+    digitalWrite(PIN_LED1, HIGH);
+    delay(300);
+    digitalWrite(PIN_LED1, LOW);
+    delay(1700);
+    if (button1.isPressed()) {
+      Serial.println("OP_MODE_");
+      op_mode = OP_MODE_BLE;
+      break;
+    } else if (button2.isPressed()) {
+      Serial.println("OP_MODE_SLEEP");
+      op_mode = OP_MODE_SLEEP;
+      break;
+    } else {
+      op_mode = OP_MODE_WIFI;
+      break;
     }
+    waitCount++;
   }
   digitalWrite(PIN_LED2, LOW);
   delay(1000);
 
-  if(op_mode==OP_MODE_BLE){
-    for(int i = 0 ; i<3 ; i++){
+  if (op_mode == OP_MODE_BLE) {
+    for (int i = 0; i < 3; i++) {
       digitalWrite(PIN_LED2, HIGH);
       delay(300);
       digitalWrite(PIN_LED2, LOW);
       delay(700);
-    }  
+    }
     // BLE setup
     ble_setup_custom();
     delay(1000);
 
-  }else if(op_mode==OP_MODE_WIFI){
-    for(int i = 0 ; i<3 ; i++){
+  } else if (op_mode == OP_MODE_WIFI) {
+    for (int i = 0; i < 3; i++) {
       digitalWrite(PIN_LED1, HIGH);
       delay(300);
       digitalWrite(PIN_LED1, LOW);
       delay(700);
-    }  
+    }
     //sensor setup
     setSensorPRS();
     setSensorIMU();
@@ -337,7 +340,6 @@ void setup() {
     Serial.println("writing data");
     writeFileBytes(SPIFFS, path, (uint8_t*)accdum, 0);
 
-
     // WiFi connection
     Serial.println("connecting to AP");
     bool isAPconnected = false;
@@ -354,13 +356,12 @@ void setup() {
       Serial.println("AP not connected. Proceed anyway..");
     }
     // MQTT setup
-    MQTTclient.begin(server_addr.c_str(),server_port, net);
+    MQTTclient.begin(server_addr.c_str(), server_port, net);
     MQTTclient.onMessage(messageReceived);
     connect();
-
-  }else{
-    op_mode=OP_MODE_SLEEP;
-    for(int i = 0 ; i<3 ; i++){
+  } else {
+    op_mode = OP_MODE_SLEEP;
+    for (int i = 0; i < 3; i++) {
       digitalWrite(PIN_LED1, HIGH);
       digitalWrite(PIN_LED2, HIGH);
       delay(200);
@@ -368,6 +369,7 @@ void setup() {
       digitalWrite(PIN_LED2, LOW);
       delay(800);
     }
+    deep_sleep_perpet();
     Serial.println("DEEP SLEEP MODE");
   }
 
@@ -441,55 +443,90 @@ void setup() {
   // deep_sleep_perpet();
 
   digitalWrite(18, HIGH);
+  digitalWrite(19, PMICState);
+
+  previousTimeSET = millis();
+  previousTimeALERT = millis();
 }
-
-
-uint32_t timestamp[3] = { 10000, 10000, 10000 };
-uint32_t dt[3] = { 33, 50, 1000 };
-int8_t idx[3] = { 0, 0, 0 };
-uint16_t iter = 0;
 
 bool bViewerActive = false;
 bool bPetActive = true;
 bool bTimerSet = false;
+bool ledState = false;
+bool flag_Recharge = false;
+int counter_Recharge = 0;
+
+uint32_t timestamp[3] = { 10000, 10000, 10000 };
+uint32_t dt[3] = { 33, 50, 50 };
+int8_t idx[3] = { 0, 0, 0 };
+uint16_t iter = 0;
 
 void loop() {
   // ArduinoOTA.handle();
   // ESP.restart();
-  // int analogVolts = 2 * analogReadMilliVolts(34);
-  // Serial.printf("ADC millivolts value = %d\n", analogVolts);
+  int analogVolts = 0;
+  int analogVolts_temp = 2 * analogReadMilliVolts(34);
 
-  // if (analogVolts < 3350) {
-  //   Serial.println("Low Voltage Alert!");
-  //   digitalWrite(16, HIGH);
-  //   digitalWrite(17, HIGH);
-  // } else if (analogVolts < 3300) {
-  //   digitalWrite(16, LOW);
-  //   digitalWrite(17, LOW);
-  //   deep_sleep_perpet();
-  // } else {
-  // }
-
-  // Button UI
-  if (button1.isPressed()) {
-    delay(200);
-    if (millis() - button1.pressStartTime > 3000) {
-      if (button2.isPressed() && millis() - button2.pressStartTime > 3000) {
-        Serial.println("Long press detected. Restarting..");
-        for(int i = 0 ; i<3 ; i++){
-          digitalWrite(PIN_LED1, HIGH);
-          delay(300);
-          digitalWrite(PIN_LED1, LOW);
-          delay(400);
-        }
-        op_mode=OP_MODE_SLEEP;
-        setOpMode(op_mode);
-        ESP.restart();
-      }
+  if (BatVoltinitFlag == true) {
+    for (int j = 0; j < BatVoltNumReadings; j++) {
+      BatVoltReadings[j] = analogVolts_temp;
+      BatVolttotal = BatVolttotal + BatVoltReadings[j];
     }
+    BatVoltinitFlag = false;
   }
 
-  if(op_mode==OP_MODE_WIFI){
+  BatVolttotal = BatVolttotal - BatVoltReadings[BatVoltindex];
+  BatVoltReadings[BatVoltindex] = analogVolts_temp;
+  BatVolttotal = BatVolttotal + BatVoltReadings[BatVoltindex];
+  BatVoltindex = BatVoltindex + 1;
+  if (BatVoltindex >= BatVoltNumReadings) {
+    BatVoltindex = 0;
+  }
+
+  analogVolts = BatVolttotal / BatVoltNumReadings;
+  // Serial.printf("ADC millivolts value = %d\n", analogVolts);
+
+  if (analogVolts < 3375) {
+    Serial.println("Low Voltage Alert!");
+    unsigned long currentTime = millis();        // get the current time
+    if (currentTime - previousTimeSET >= 250) {  // check if the interval has elapsed
+      ledState = !ledState;
+      digitalWrite(17, ledState);                // update the LED 17
+      previousTimeSET = currentTime;             // reset the previous time
+    }
+  } else if (analogVolts < 3300) {
+    digitalWrite(17, LOW);  // turn off the LED 17
+    deep_sleep_perpet();    // enter deep sleep mode
+  } else {
+  }
+
+  if (analogVolts < 3350) {
+    // Get the current time in milliseconds
+    unsigned long currentTime = millis();
+    // Check if the interval has elapsed since the previous time and the flag_Recharge is false
+    if (currentTime - previousTimeALERT >= 10000 && flag_Recharge == false) {
+      // Toggle the LED state
+      PMICState = !PMICState;
+      // Write the LED state to the pin
+      digitalWrite(19, PMICState);
+      // Increment the counter_Recharge by 1
+      counter_Recharge++;
+      // Check if the counter_Recharge is equal to 2
+      if (counter_Recharge == 2) {
+        // Set the flag_Recharge to true
+        flag_Recharge = true;
+      }
+      // Update the previous time
+      previousTimeALERT = currentTime;
+    }
+  } else {
+    // Reset the flag_Recharge to false
+    flag_Recharge = false;
+    // Reset the counter_Recharge to 0
+    counter_Recharge = 0;
+  }
+
+  if (op_mode == OP_MODE_WIFI) {
     MQTTclient.loop();
     delay(10);  // <- fixes some issues with WiFi stability
     if (!MQTTclient.connected()) {
@@ -498,10 +535,10 @@ void loop() {
 
     bViewerActive = true;
     if (bViewerActive == true) {
-      setCpuFrequencyMhz(80); //No BT/Wifi: 10,20,40 MHz, for BT/Wifi, 80,160,240MHz
+      setCpuFrequencyMhz(80);  //No BT/Wifi: 10,20,40 MHz, for BT/Wifi, 80,160,240MHz
       //function - sensing
       if (!bTimerSet) {
-        bTimerSet=true;
+        bTimerSet = true;
         timestamp[0] = millis();
         timestamp[1] = millis();
         timestamp[2] = millis();
@@ -518,11 +555,11 @@ void loop() {
         timestamp[0] += dt[0];
         getSensorDataIMU(acc + 3 * idx[0] + 6);
         Serial.print("acc:");
-        Serial.print(acc[3*idx[0]+6]);
+        Serial.print(acc[3 * idx[0] + 6]);
         Serial.print("\t");
-        Serial.print(acc[3*idx[0]+7]);
+        Serial.print(acc[3 * idx[0] + 7]);
         Serial.print("\t");
-        Serial.print(acc[3*idx[0]+8]);
+        Serial.print(acc[3 * idx[0] + 8]);
         Serial.println();
 
         idx[0]++;
@@ -549,11 +586,11 @@ void loop() {
           idx[1] = 0;
           Serial.println("prs tx!");
           MQTTclient.publish((topic_base + "/prs").c_str(), (const char*)prs, LEN_PRSSMPL * 4 + 6);
-          for(int i = 0;i<LEN_PRSSMPL;i++){
+          for (int i = 0; i < LEN_PRSSMPL; i++) {
             Serial.print(i);
             Serial.print(":");
             float rxbuf;
-            memcpy(&rxbuf,prs+4*i+6,sizeof(float));
+            memcpy(&rxbuf, prs + 4 * i + 6, sizeof(float));
             Serial.println(rxbuf);
           }
         }
@@ -579,6 +616,12 @@ void loop() {
           Serial.println("trh tx!");
           MQTTclient.publish((topic_base + "/trh").c_str(), (const char*)trh, LEN_TRHSMPL * 4 + 6);
         }
+
+        BAT_LEV.writeString(0, String(batteryLevEEP()));
+        BAT_LEV.commit();
+        BAT_LEV.get(0, buf_eeprom);
+        MQTTclient.publish((topic_base + "/bat").c_str(), buf_eeprom, 64);
+        Serial.printf("Battery: %s\n", buf_eeprom);
       }
 
     } else {
@@ -698,7 +741,7 @@ void loop() {
     }
 
 
-  }else if(op_mode==OP_MODE_BLE){    // BLE Control
+  } else if (op_mode == OP_MODE_BLE) {  // BLE Control
     if (deviceConnected) {
       bViewerActive = true;
       pTxCharacteristic->setValue(&txValue, 1);
@@ -722,15 +765,4 @@ void loop() {
       oldDeviceConnected = deviceConnected;
     }
   }
-
-
- 
-
-  // if (analogVolts < 3300) {
-  //   digitalWrite(16, LOW);
-  //   digitalWrite(17, LOW);
-  // }
-
-
-  // deep_sleep_perpet();/
 }
