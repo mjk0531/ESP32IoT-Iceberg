@@ -135,6 +135,7 @@ unsigned long lastMillis = 0;
 int8_t acc[LEN_ACCSMPL * 3 + 6];
 int8_t prs[LEN_PRSSMPL * 4 + 6];
 int8_t trh[LEN_TRHSMPL * 4 + 6];
+int8_t bat[1];
 
 /************************* WiFi Access Point *********************************/
 /// MQTT
@@ -620,8 +621,10 @@ void loop() {
         BAT_LEV.writeString(0, String(batteryLevEEP()));
         BAT_LEV.commit();
         BAT_LEV.get(0, buf_eeprom);
-        MQTTclient.publish((topic_base + "/bat").c_str(), buf_eeprom, 64);
-        Serial.printf("Battery: %s\n", buf_eeprom);
+        bat[0] = static_cast<int8_t>(atoi(String(buf_eeprom).c_str()));
+        Serial.print("Battery: ");
+        Serial.println(bat[0]);
+        MQTTclient.publish((topic_base + "/bat").c_str(), (const char*) bat, 1);
       }
 
     } else {

@@ -208,7 +208,8 @@ class MyCallBacks_BAT_LEV : public BLECharacteristicCallbacks {
     BAT_LEV.commit();
     BAT_LEV.get(0, buf_eeprom);
     Serial.println(String(buf_eeprom));
-    pCharacteristic->setValue((uint8_t *)buf_eeprom, strlen(buf_eeprom));
+    uint8_t sendValue = String(buf_eeprom).toInt();
+    pCharacteristic->setValue(&sendValue, sizeof(sendValue));
   }
 
   void onNotify(BLECharacteristic *pCharacteristic) {
